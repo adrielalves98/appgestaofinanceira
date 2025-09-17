@@ -20,7 +20,7 @@
     <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut, signInWithCustomToken, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, onSnapshot, query, where, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
@@ -33,13 +33,8 @@
         let userId;
         let expensesCollectionRef;
         let unsubscribe = null; // Função para remover o listener do Firestore
-        let queryConstraints = []; // Variável global para armazenar restrições de filtro
-
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-        // Elementos da interface
+        
+        // Referências aos elementos da interface
         const authContainer = document.getElementById('auth-container');
         const expenseContainer = document.getElementById('expense-container');
         const userIdEl = document.getElementById('user-id');
@@ -52,17 +47,32 @@
         const modalMessage = document.getElementById('modal-message');
         const modalCloseBtn = document.getElementById('modal-close-btn');
 
+        const form = document.getElementById('expense-form');
+        const expenseList = document.getElementById('expense-list');
+        const totalAmountEl = document.getElementById('total-amount');
+        const chartContainer = document.getElementById('chart-container');
+
+        const filterCategoryEl = document.getElementById('filter-category');
+        const filterMonthEl = document.getElementById('filter-month');
+        const filterYearEl = document.getElementById('filter-year');
+        const clearFiltersBtn = document.getElementById('clear-filters-btn');
+
+        // Configuração e inicialização do Firebase
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
         if (Object.keys(firebaseConfig).length) {
             const app = initializeApp(firebaseConfig);
             db = getFirestore(app);
             auth = getAuth(app);
-
+            
             // Gerencia o estado de autenticação do usuário
             onAuthStateChanged(auth, (user) => {
                 if (user) {
                     userId = user.uid;
-                    userIdEl.textContent = user.uid;
-                    welcomeMessageEl.textContent = `Bem-vindo(a), ${user.email}!`;
+                    userIdEl.textContent = userId;
+                    welcomeMessageEl.textContent = `Bem-vindo(a), ${user.email || 'Usuário Anônimo'}!`;
                     // Define o caminho da coleção para os dados privados do usuário
                     expensesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/expenses`);
                     console.log("Usuário autenticado. ID do usuário:", userId);
@@ -90,27 +100,20 @@
                 }
             });
 
-            // Se for o primeiro acesso, tenta o login anônimo
+            // Se for o primeiro acesso, tenta o login personalizado ou anônimo
             if (initialAuthToken) {
                  signInWithCustomToken(auth, initialAuthToken).catch(error => {
                     console.error("Falha na autenticação inicial:", error);
+                 });
+            } else {
+                 signInAnonymously(auth).catch(error => {
+                    console.error("Falha no login anônimo:", error);
                  });
             }
 
         } else {
             console.error("Configuração do Firebase ausente.");
         }
-
-        // DOM elements
-        const form = document.getElementById('expense-form');
-        const expenseList = document.getElementById('expense-list');
-        const totalAmountEl = document.getElementById('total-amount');
-        const chartContainer = document.getElementById('chart-container');
-
-        const filterCategoryEl = document.getElementById('filter-category');
-        const filterMonthEl = document.getElementById('filter-month');
-        const filterYearEl = document.getElementById('filter-year');
-        const clearFiltersBtn = document.getElementById('clear-filters-btn');
 
         // Preenche dinamicamente as opções de ano do filtro
         const currentYear = new Date().getFullYear();
@@ -249,7 +252,7 @@
             const year = filterYearEl.value;
             
             let q = expensesCollectionRef;
-            queryConstraints = [];
+            const queryConstraints = [];
             if (category !== 'Todos') {
                 queryConstraints.push(where('category', '==', category));
             }
@@ -559,4 +562,3 @@
     </div>
 </body>
 </html>
-
