@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestão de Gastos</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, where, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Ativar logs de debug do Firebase
+        setLogLevel('debug');
+        
+        // Variáveis globais para os serviços do Firebase
+        let db;
+        let auth;
+        let userId;
+        let expensesCollectionRef;
+        let unsubscribe = null; // Função para remover o listener do Firestore
+
+        // Variáveis da API Gemini
+        const API_KEY = "";
+        const API_URL_GEMINI = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${API_KEY}`;
+        
+        // Configuração e inicialização do Firebase
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        if (Object.keys(firebaseConfig).length) {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            
+            // Autenticação anônima, já que a tela de login foi removida
+            signInAnonymously(auth).catch(error => {
+                console.error("Falha no login anônimo:", error);
+            });
+        } else {
+            console.error("Configuração do Firebase ausente.");
+        }
+
+        // --- Gerenciador de eventos DOM e Inicialização ---
+        document.addEventListener('DOMContentLoaded', () => {
+            const userIdEl = document.getElementById('user-id');
+            const welcomeMessageEl = document.getElementById('welcome-message');
+            const form = document.getElementById('expense-form');
+            const expenseList = document.getElementById('expense-list');
+            const totalAmountEl = document.getElementById('total-amount');
+            const chartContainer = document.getElementById('chart-container');
+            const filterCategoryEl = document.getElementById('filter-category');
+
+            const modal = document.getElementById('modal');
+            const modalMessage = document.getElementById('modal-message');
+            const modalCloseBtn = document.getElementById('modal-close-btn');
+
+            const analysisBtn = document.getElementById('analysis-btn');
+            const tipsBtn = document.getElementById('tips-btn');
+            const aiOutput = document.getElementById('ai-output');
+            const loadingIndicator = document.getElementById('loading-indicator');
+
+            // Gerencia o estado de autenticação do usuário
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    userId = user.uid;
+                    userIdEl.textContent = userId;
+                    welcomeMessageEl.textContent = `Usuário Anônimo`;
+                    // Define o caminho da coleção para os dados privados do usuário
+                    expensesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/expenses`);
+                    console.log("Usuário autenticado. ID do usuário:", userId);
+                    console.log("Caminho da coleção:", `artifacts/${appId}/users/${userId}/expenses`);
+                    
+                    // Adiciona o listener para o filtro de categoria
+                    filterCategoryEl.addEventListener('change', applyFilters);
+                    analysisBtn.addEventListener('click', getFinancialAnalysis);
+                    tipsBtn.addEventListener('click', getBudgetTips);
+                    
+                    applyFilters();
+
+                } else {
+                    console.log("Nenhum usuário logado.");
+                    userIdEl.textContent = 'Aguardando autenticação...';
+                    welcomeMessageEl.textContent = '';
+                    
+                    // Se houver um listener ativo, desinscreve-se
+                    if (unsubscribe) {
+                        unsubscribe();
+                        unsubscribe = null;
+                    }
+                }
+            });
+
+            // Função para exibir o modal personalizado
+            const showModal = (message) => {
+                modalMessage.textContent = message;
+                modal.classList.remove('hidden');
+            };
+
+            // Função para ocultar o modal personalizado
+            const hideModal = () => {
+                modal.classList.add('hidden');
+            };
+
+            // Listener para o botão de fechar do modal
+            modalCloseBtn.addEventListener('click', hideModal);
+
+            // Renderiza as despesas na interface
+            const renderExpenses = (expenses) => {
+                expenseList.innerHTML = '';
+                let total = 0;
+                if (expenses.length === 0) {
+                    expenseList.innerHTML = '<p class="text-center text-gray-500 italic">Nenhum gasto registrado ainda.</p>';
+                }
+                expenses.forEach(expense => {
+                    const li = document.createElement('li');
+                    li.className = 'flex justify-between items-center bg-white p-4 rounded-xl shadow-sm hover:shadow-md transition-shadow';
+                    li.innerHTML = `
+                        <div>
+                            <p class="font-semibold text-gray-800">${expense.name}</p>
+                            <p class="text-sm text-gray-500">Valor: R$ ${parseFloat(expense.value).toFixed(2).replace('.', ',')}</p>
+                            <span class="text-xs text-indigo-500 font-medium bg-indigo-100 px-2 py-1 rounded-full mt-1 inline-block">${expense.category}</span>
+                        </div>
+                        <button data-id="${expense.id}" class="delete-btn text-red-500 hover:text-red-700 transition-colors">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm6 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clip-rule="evenodd" />
+                            </svg>
+                        </button>
+                    `;
+                    expenseList.appendChild(li);
+                    total += parseFloat(expense.value);
+                });
+                totalAmountEl.textContent = `Total: R$ ${total.toFixed(2).replace('.', ',')}`;
+
+                // Adiciona listeners para os botões de exclusão
+                document.querySelectorAll('.delete-btn').forEach(button => {
+                    button.addEventListener('click', async (e) => {
+                        const id = e.currentTarget.dataset.id;
+                        if (id && auth.currentUser) {
+                            try {
+                                const expenseDocRef = doc(db, `artifacts/${appId}/users/${userId}/expenses`, id);
+                                await deleteDoc(expenseDocRef);
+                                showModal('Gasto excluído com sucesso!');
+                            } catch (e) {
+                                showModal('Erro ao excluir o gasto.');
+                                console.error("Erro ao remover documento: ", e);
+                            }
+                        }
+                    });
+                });
+
+                renderCharts(expenses);
+            };
+
+            const categoryColors = {
+                'Alimentação': 'bg-green-500 hover:bg-green-600',
+                'Transporte': 'bg-yellow-500 hover:bg-yellow-600',
+                'Moradia': 'bg-red-500 hover:bg-red-600',
+                'Lazer': 'bg-blue-500 hover:bg-blue-600',
+                'Saúde': 'bg-purple-500 hover:bg-purple-600',
+                'Contas': 'bg-pink-500 hover:bg-pink-600',
+                'Outros': 'bg-gray-500 hover:bg-gray-600'
+            };
+
+            // Renderiza o gráfico por categoria
+            const renderCharts = (expenses) => {
+                const totalsByCategory = {};
+                let grandTotal = 0;
+                
+                expenses.forEach(expense => {
+                    const category = expense.category;
+                    const value = parseFloat(expense.value);
+                    totalsByCategory[category] = (totalsByCategory[category] || 0) + value;
+                    grandTotal += value;
+                });
+
+                chartContainer.innerHTML = '';
+
+                if (Object.keys(totalsByCategory).length === 0) {
+                    chartContainer.innerHTML = '<p class="text-center text-gray-500 italic">Sem dados para o gráfico.</p>';
+                    return;
+                }
+                
+                const maxTotal = Math.max(...Object.values(totalsByCategory));
+
+                for (const category in totalsByCategory) {
+                    const total = totalsByCategory[category];
+                    const barHeight = (total / maxTotal) * 150;
+                    const colorClass = categoryColors[category] || 'bg-indigo-500 hover:bg-indigo-600';
+
+                    const categoryDiv = document.createElement('div');
+                    categoryDiv.className = 'flex flex-col items-center space-y-2';
+
+                    const barDiv = document.createElement('div');
+                    barDiv.className = `w-10 ${colorClass} rounded-t-lg transition-all duration-300 ease-in-out relative`;
+                    barDiv.style.height = `${barHeight}px`;
+
+                    const tooltipSpan = document.createElement('span');
+                    tooltipSpan.className = 'absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-800 text-white text-xs rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-300';
+                    tooltipSpan.textContent = `R$ ${total.toFixed(2).replace('.', ',')}`;
+                    
+                    const barContainer = document.createElement('div');
+                    barContainer.className = 'relative group';
+                    barContainer.appendChild(barDiv);
+                    barDiv.appendChild(tooltipSpan);
+
+                    const labelSpan = document.createElement('span');
+                    labelSpan.className = 'text-xs text-center text-gray-600 mt-2 truncate max-w-[80px]';
+                    labelSpan.textContent = category;
+
+                    categoryDiv.appendChild(barDiv);
+                    categoryDiv.appendChild(labelSpan);
+                    chartContainer.appendChild(categoryDiv);
+                }
+            };
+
+            // Aplica os filtros na query do Firestore
+            const applyFilters = () => {
+                if (!auth.currentUser) {
+                    return;
+                }
+
+                if (unsubscribe) {
+                    unsubscribe();
+                }
+
+                const category = filterCategoryEl.value;
+                
+                let q = expensesCollectionRef;
+                const queryConstraints = [];
+                if (category !== 'Todos') {
+                    queryConstraints.push(where('category', '==', category));
+                }
+                q = query(q, ...queryConstraints);
+
+                unsubscribe = onSnapshot(q, (snapshot) => {
+                    const expenses = [];
+                    snapshot.forEach(doc => {
+                        expenses.push({ id: doc.id, ...doc.data() });
+                    });
+                    renderExpenses(expenses);
+                }, (error) => {
+                    console.error("Erro ao escutar mudanças:", error);
+                });
+            };
+            
+            // --- Funções da API Gemini ---
+            const showLoading = (message) => {
+                loadingIndicator.textContent = message;
+                loadingIndicator.classList.remove('hidden');
+                aiOutput.innerHTML = '';
+            };
+
+            const hideLoading = () => {
+                loadingIndicator.classList.add('hidden');
+            };
+
+            const getExpenseDataAsString = async () => {
+                const snapshot = await getDocs(expensesCollectionRef);
+                const expenses = snapshot.docs.map(doc => doc.data());
+                
+                if (expenses.length === 0) {
+                    return null;
+                }
+                
+                let expenseString = 'Gastos registrados:\n';
+                expenses.forEach(exp => {
+                    expenseString += `- Nome: ${exp.name}, Valor: R$${exp.value.toFixed(2)}, Categoria: ${exp.category}\n`;
+                });
+                return expenseString;
+            };
+
+            const callGeminiApi = async (prompt) => {
+                const payload = {
+                    contents: [{ parts: [{ text: prompt }] }],
+                };
+
+                const response = await fetch(API_URL_GEMINI, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                return result.candidates?.[0]?.content?.parts?.[0]?.text || 'Não foi possível gerar uma resposta.';
+            };
+
+            const getFinancialAnalysis = async () => {
+                showLoading('Gerando análise financeira...');
+                const expenseData = await getExpenseDataAsString();
+                if (!expenseData) {
+                    aiOutput.innerHTML = '<p class="text-red-500">Por favor, adicione alguns gastos antes de gerar uma análise.</p>';
+                    hideLoading();
+                    return;
+                }
+                const prompt = `Com base nos seguintes gastos, forneça uma análise concisa e amigável, destacando as áreas de maior gasto. Use a moeda brasileira (R$).\n\n${expenseData}`;
+                const analysisText = await callGeminiApi(prompt);
+                aiOutput.innerHTML = `<p>${analysisText.replace(/\n/g, '<br>')}</p>`;
+                hideLoading();
+            };
+
+            const getBudgetTips = async () => {
+                showLoading('Gerando dicas de orçamento...');
+                const expenseData = await getExpenseDataAsString();
+                if (!expenseData) {
+                    aiOutput.innerHTML = '<p class="text-red-500">Por favor, adicione alguns gastos antes de gerar dicas de orçamento.</p>';
+                    hideLoading();
+                    return;
+                }
+                const prompt = `Com base nos seguintes gastos, forneça 3 dicas práticas e personalizadas para economizar dinheiro, focadas nas categorias com maior gasto. Use a moeda brasileira (R$).\n\n${expenseData}`;
+                const tipsText = await callGeminiApi(prompt);
+                aiOutput.innerHTML = `<p>${tipsText.replace(/\n/g, '<br>')}</p>`;
+                hideLoading();
+            };
+            
+            // --- Gerenciador de envio de formulário de despesas ---
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const expenseName = document.getElementById('expense-name').value.trim();
+                const expenseValue = document.getElementById('expense-value').value;
+                const expenseCategory = document.getElementById('expense-category').value;
+                
+                if (!expenseName || !expenseValue || !expenseCategory) {
+                    showModal('Por favor, preencha todos os campos.');
+                    return;
+                }
+
+                if (isNaN(parseFloat(expenseValue)) || parseFloat(expenseValue) <= 0) {
+                    showModal('O valor deve ser um número positivo.');
+                    return;
+                }
+
+                const now = new Date();
+                const newExpense = {
+                    name: expenseName,
+                    value: parseFloat(expenseValue),
+                    category: expenseCategory,
+                    createdAt: now,
+                    month: now.getMonth() + 1, // Mês é indexado em 0
+                    year: now.getFullYear()
+                };
+
+                try {
+                    if (auth.currentUser) {
+                        await addDoc(expensesCollectionRef, newExpense);
+                        form.reset();
+                        showModal('Gasto adicionado com sucesso!');
+                    } else {
+                        showModal('Por favor, faça login para adicionar gastos.');
+                    }
+                } catch (e) {
+                    showModal('Erro ao adicionar o gasto.');
+                    console.error("Erro ao adicionar documento: ", e);
+                }
+            });
+        });
+    </script>
+</head>
+<body class="bg-gray-100 font-sans p-4">
+
+    <!-- Container Principal do Aplicativo -->
+    <div id="expense-container" class="max-w-xl mx-auto bg-white rounded-2xl shadow-lg p-6 md:p-8 space-y-6">
+        <!-- Header Section -->
+        <header class="text-center">
+            <h1 class="text-3xl md:text-4xl font-extrabold text-gray-800">Meus Gastos Mensais</h1>
+            <p class="text-gray-500 mt-2">Registre suas despesas para uma melhor análise financeira.</p>
+        </header>
+
+        <!-- User Info -->
+        <div class="bg-gray-50 p-4 rounded-xl text-center text-sm text-gray-600 flex justify-between items-center">
+             <div>
+                 <p id="welcome-message" class="font-semibold text-gray-800"></p>
+                 <p>Seu ID de Usuário para colaboração: <span id="user-id" class="font-mono break-all text-gray-800"></span></p>
+             </div>
+        </div>
+        
+        <!-- Form to add new expense -->
+        <form id="expense-form" class="bg-gray-50 p-6 rounded-xl space-y-4">
+            <div class="flex flex-col md:flex-row md:space-x-4 space-y-4 md:space-y-0">
+                <div class="flex-1">
+                    <label for="expense-name" class="block text-sm font-medium text-gray-700">Nome do Gasto</label>
+                    <input type="text" id="expense-name" placeholder="Ex: Aluguel, Mercado" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 transition-colors duration-200 p-2">
+                </div>
+                <div class="flex-1">
+                    <label for="expense-value" class="block text-sm font-medium text-gray-700">Valor (R$)</label>
+                    <input type="number" step="0.01" id="expense-value" placeholder="Ex: 500.00" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 transition-colors duration-200 p-2">
+                </div>
+            </div>
+            <div>
+                <label for="expense-category" class="block text-sm font-medium text-gray-700">Categoria</label>
+                <select id="expense-category" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 transition-colors duration-200 p-2">
+                    <option value="Alimentação">Alimentação</option>
+                    <option value="Transporte">Transporte</option>
+                    <option value="Moradia">Moradia</option>
+                    <option value="Lazer">Lazer</option>
+                    <option value="Saúde">Saúde</option>
+                    <option value="Contas">Contas</option>
+                    <option value="Outros">Outros</option>
+                </select>
+            </div>
+            <button type="submit" class="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors duration-200">
+                Adicionar Gasto
+            </button>
+        </form>
+
+        <!-- Filter Section -->
+        <section class="space-y-4">
+            <h2 class="text-2xl font-bold text-gray-800">Filtrar Gastos</h2>
+            <div class="grid grid-cols-1">
+                <div>
+                    <label for="filter-category" class="block text-sm font-medium text-gray-700">Categoria</label>
+                    <select id="filter-category" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2">
+                        <option value="Todos">Todas</option>
+                        <option value="Alimentação">Alimentação</option>
+                        <option value="Transporte">Transporte</option>
+                        <option value="Moradia">Moradia</option>
+                        <option value="Lazer">Lazer</option>
+                        <option value="Saúde">Saúde</option>
+                        <option value="Contas">Contas</option>
+                        <option value="Outros">Outros</option>
+                    </select>
+                </div>
+            </div>
+        </section>
+
+        <!-- Chart Section -->
+        <section class="space-y-4">
+            <h2 class="text-2xl font-bold text-gray-800">Gráfico de Gastos por Categoria</h2>
+            <div id="chart-container" class="flex items-end justify-around h-48 bg-gray-50 p-4 rounded-xl shadow-inner">
+                <!-- Chart bars will be rendered here by JavaScript -->
+            </div>
+        </section>
+
+        <!-- AI-powered Features Section -->
+        <section class="space-y-4">
+            <h2 class="text-2xl font-bold text-gray-800">Insights Financeiros ✨</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <button id="analysis-btn" class="w-full py-3 px-4 rounded-md shadow-md text-sm font-medium text-white bg-green-600 hover:bg-green-700 transition-colors duration-200">
+                    Análise Financeira ✨
+                </button>
+                <button id="tips-btn" class="w-full py-3 px-4 rounded-md shadow-md text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 transition-colors duration-200">
+                    Dicas de Orçamento ✨
+                </button>
+            </div>
+            <div id="ai-output" class="bg-gray-50 p-4 rounded-xl shadow-inner text-gray-700 min-h-[60px]">
+                <p class="text-center text-gray-400">Clique em um dos botões para gerar insights financeiros!</p>
+            </div>
+            <div id="loading-indicator" class="hidden text-center text-indigo-600 font-semibold italic mt-4">
+                <div class="animate-spin inline-block w-6 h-6 border-[3px] border-current border-t-transparent text-indigo-600 rounded-full dark:text-indigo-500" role="status" aria-label="loading">
+                    <span class="sr-only">Carregando...</span>
+                </div>
+                <span class="ml-2">Carregando...</span>
+            </div>
+        </section>
+
+        <!-- Expenses List Section -->
+        <section class="space-y-4">
+            <h2 class="text-2xl font-bold text-gray-800">Gastos Registrados</h2>
+            <div id="expense-list" class="space-y-3">
+                <!-- Expenses will be rendered here by JavaScript -->
+            </div>
+        </section>
+
+        <!-- Total Section -->
+        <section class="mt-6">
+            <div class="bg-indigo-600 text-white rounded-xl shadow-md p-6 text-center">
+                <h3 class="text-lg font-semibold">Total Gasto no Período</h3>
+                <p id="total-amount" class="text-3xl font-extrabold mt-2">Total: R$ 0,00</p>
+            </div>
+        </section>
+    </div>
+
+    <!-- Custom Modal for Messages -->
+    <div id="modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-xl bg-white">
+            <div class="mt-3 text-center">
+                <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100">
+                    <svg class="h-6 w-6 text-green-600" fill="none" viewBox="0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                    </svg>
+                </div>
+                <h3 class="text-lg leading-6 font-medium text-gray-900 mt-2">Atenção</h3>
+                <div class="mt-2 px-7 py-3">
+                    <p id="modal-message" class="text-sm text-gray-500"></p>
+                </div>
+                <div class="items-center px-4 py-3">
+                    <button id="modal-close-btn" class="px-4 py-2 bg-indigo-600 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        OK
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
