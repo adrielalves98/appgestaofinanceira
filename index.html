@@ -34,29 +34,6 @@
         let expensesCollectionRef;
         let unsubscribe = null; // Função para remover o listener do Firestore
         
-        // Referências aos elementos da interface
-        const authContainer = document.getElementById('auth-container');
-        const expenseContainer = document.getElementById('expense-container');
-        const userIdEl = document.getElementById('user-id');
-        const welcomeMessageEl = document.getElementById('welcome-message');
-        const logoutBtn = document.getElementById('logout-btn');
-        const loginForm = document.getElementById('login-form');
-        const registerForm = document.getElementById('register-form');
-
-        const modal = document.getElementById('modal');
-        const modalMessage = document.getElementById('modal-message');
-        const modalCloseBtn = document.getElementById('modal-close-btn');
-
-        const form = document.getElementById('expense-form');
-        const expenseList = document.getElementById('expense-list');
-        const totalAmountEl = document.getElementById('total-amount');
-        const chartContainer = document.getElementById('chart-container');
-
-        const filterCategoryEl = document.getElementById('filter-category');
-        const filterMonthEl = document.getElementById('filter-month');
-        const filterYearEl = document.getElementById('filter-year');
-        const clearFiltersBtn = document.getElementById('clear-filters-btn');
-
         // Configuração e inicialização do Firebase
         const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -67,6 +44,45 @@
             db = getFirestore(app);
             auth = getAuth(app);
             
+            // Se for o primeiro acesso, tenta o login personalizado ou anônimo
+            if (initialAuthToken) {
+                 signInWithCustomToken(auth, initialAuthToken).catch(error => {
+                    console.error("Falha na autenticação inicial:", error);
+                 });
+            } else {
+                 signInAnonymously(auth).catch(error => {
+                    console.error("Falha no login anônimo:", error);
+                 });
+            }
+
+        } else {
+            console.error("Configuração do Firebase ausente.");
+        }
+
+        // --- Gerenciador de eventos DOM e Inicialização ---
+        document.addEventListener('DOMContentLoaded', () => {
+            const authContainer = document.getElementById('auth-container');
+            const expenseContainer = document.getElementById('expense-container');
+            const userIdEl = document.getElementById('user-id');
+            const welcomeMessageEl = document.getElementById('welcome-message');
+            const logoutBtn = document.getElementById('logout-btn');
+            const loginForm = document.getElementById('login-form');
+            const registerForm = document.getElementById('register-form');
+
+            const modal = document.getElementById('modal');
+            const modalMessage = document.getElementById('modal-message');
+            const modalCloseBtn = document.getElementById('modal-close-btn');
+
+            const form = document.getElementById('expense-form');
+            const expenseList = document.getElementById('expense-list');
+            const totalAmountEl = document.getElementById('total-amount');
+            const chartContainer = document.getElementById('chart-container');
+
+            const filterCategoryEl = document.getElementById('filter-category');
+            const filterMonthEl = document.getElementById('filter-month');
+            const filterYearEl = document.getElementById('filter-year');
+            const clearFiltersBtn = document.getElementById('clear-filters-btn');
+
             // Gerencia o estado de autenticação do usuário
             onAuthStateChanged(auth, (user) => {
                 if (user) {
@@ -100,278 +116,264 @@
                 }
             });
 
-            // Se for o primeiro acesso, tenta o login personalizado ou anônimo
-            if (initialAuthToken) {
-                 signInWithCustomToken(auth, initialAuthToken).catch(error => {
-                    console.error("Falha na autenticação inicial:", error);
-                 });
-            } else {
-                 signInAnonymously(auth).catch(error => {
-                    console.error("Falha no login anônimo:", error);
-                 });
+            // Preenche dinamicamente as opções de ano do filtro
+            const currentYear = new Date().getFullYear();
+            for (let i = 0; i < 5; i++) {
+                const year = currentYear - i;
+                const option = document.createElement('option');
+                option.value = year;
+                option.textContent = year;
+                filterYearEl.appendChild(option);
             }
 
-        } else {
-            console.error("Configuração do Firebase ausente.");
-        }
-
-        // Preenche dinamicamente as opções de ano do filtro
-        const currentYear = new Date().getFullYear();
-        for (let i = 0; i < 5; i++) {
-            const year = currentYear - i;
-            const option = document.createElement('option');
-            option.value = year;
-            option.textContent = year;
-            filterYearEl.appendChild(option);
-        }
-
-        // Função para exibir o modal personalizado
-        const showModal = (message) => {
-            modalMessage.textContent = message;
-            modal.classList.remove('hidden');
-        };
-
-        // Função para ocultar o modal personalizado
-        const hideModal = () => {
-            modal.classList.add('hidden');
-        };
-
-        // Listener para o botão de fechar do modal
-        modalCloseBtn.addEventListener('click', hideModal);
-
-        // Renderiza as despesas na interface
-        const renderExpenses = (expenses) => {
-            expenseList.innerHTML = '';
-            let total = 0;
-            if (expenses.length === 0) {
-                expenseList.innerHTML = '<p class="text-center text-gray-500 italic">Nenhum gasto registrado ainda.</p>';
-            }
-            expenses.forEach(expense => {
-                const li = document.createElement('li');
-                li.className = 'flex justify-between items-center bg-white p-4 rounded-xl shadow-sm hover:shadow-md transition-shadow';
-                li.innerHTML = `
-                    <div>
-                        <p class="font-semibold text-gray-800">${expense.name}</p>
-                        <p class="text-sm text-gray-500">Valor: R$ ${parseFloat(expense.value).toFixed(2).replace('.', ',')}</p>
-                        <span class="text-xs text-indigo-500 font-medium bg-indigo-100 px-2 py-1 rounded-full mt-1 inline-block">${expense.category}</span>
-                    </div>
-                    <button data-id="${expense.id}" class="delete-btn text-red-500 hover:text-red-700 transition-colors">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm6 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clip-rule="evenodd" />
-                        </svg>
-                    </button>
-                `;
-                expenseList.appendChild(li);
-                total += parseFloat(expense.value);
-            });
-            totalAmountEl.textContent = `Total: R$ ${total.toFixed(2).replace('.', ',')}`;
-
-            // Adiciona listeners para os botões de exclusão
-            document.querySelectorAll('.delete-btn').forEach(button => {
-                button.addEventListener('click', async (e) => {
-                    const id = e.currentTarget.dataset.id;
-                    if (id && auth.currentUser) {
-                        try {
-                            const expenseDocRef = doc(db, `artifacts/${appId}/users/${userId}/expenses`, id);
-                            await deleteDoc(expenseDocRef);
-                            showModal('Gasto excluído com sucesso!');
-                        } catch (e) {
-                            showModal('Erro ao excluir o gasto.');
-                            console.error("Erro ao remover documento: ", e);
-                        }
-                    }
-                });
-            });
-
-            renderCharts(expenses);
-        };
-
-        // Renderiza o gráfico por categoria
-        const renderCharts = (expenses) => {
-            const totalsByCategory = {};
-            let grandTotal = 0;
-            
-            expenses.forEach(expense => {
-                const category = expense.category;
-                const value = parseFloat(expense.value);
-                totalsByCategory[category] = (totalsByCategory[category] || 0) + value;
-                grandTotal += value;
-            });
-
-            chartContainer.innerHTML = '';
-
-            if (Object.keys(totalsByCategory).length === 0) {
-                chartContainer.innerHTML = '<p class="text-center text-gray-500 italic">Sem dados para o gráfico.</p>';
-                return;
-            }
-            
-            const maxTotal = Math.max(...Object.values(totalsByCategory));
-
-            for (const category in totalsByCategory) {
-                const total = totalsByCategory[category];
-                const barHeight = (total / maxTotal) * 150;
-
-                const categoryDiv = document.createElement('div');
-                categoryDiv.className = 'flex flex-col items-center space-y-2';
-
-                const barDiv = document.createElement('div');
-                barDiv.className = 'w-10 bg-indigo-500 rounded-t-lg transition-all duration-300 ease-in-out hover:bg-indigo-600 relative';
-                barDiv.style.height = `${barHeight}px`;
-
-                const tooltipSpan = document.createElement('span');
-                tooltipSpan.className = 'absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-800 text-white text-xs rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-300';
-                tooltipSpan.textContent = `R$ ${total.toFixed(2).replace('.', ',')}`;
-                
-                const barContainer = document.createElement('div');
-                barContainer.className = 'relative group';
-                barContainer.appendChild(barDiv);
-                barDiv.appendChild(tooltipSpan);
-
-                const labelSpan = document.createElement('span');
-                labelSpan.className = 'text-xs text-center text-gray-600 mt-2 truncate max-w-[80px]';
-                labelSpan.textContent = category;
-
-                categoryDiv.appendChild(barDiv);
-                categoryDiv.appendChild(labelSpan);
-                chartContainer.appendChild(categoryDiv);
-            }
-        };
-
-        // Aplica os filtros na query do Firestore
-        const applyFilters = () => {
-            if (!auth.currentUser) {
-                return;
-            }
-
-            if (unsubscribe) {
-                unsubscribe();
-            }
-
-            const category = filterCategoryEl.value;
-            const month = filterMonthEl.value;
-            const year = filterYearEl.value;
-            
-            let q = expensesCollectionRef;
-            const queryConstraints = [];
-            if (category !== 'Todos') {
-                queryConstraints.push(where('category', '==', category));
-            }
-            if (month !== 'Todos') {
-                queryConstraints.push(where('month', '==', parseInt(month)));
-            }
-            if (year !== 'Todos') {
-                queryConstraints.push(where('year', '==', parseInt(year)));
-            }
-            q = query(q, ...queryConstraints);
-
-            unsubscribe = onSnapshot(q, (snapshot) => {
-                const expenses = [];
-                snapshot.forEach(doc => {
-                    expenses.push({ id: doc.id, ...doc.data() });
-                });
-                renderExpenses(expenses);
-            }, (error) => {
-                console.error("Erro ao escutar mudanças:", error);
-            });
-        };
-
-        // Adiciona listeners para os filtros
-        const setupFilterListeners = () => {
-            filterCategoryEl.addEventListener('change', applyFilters);
-            filterMonthEl.addEventListener('change', applyFilters);
-            filterYearEl.addEventListener('change', applyFilters);
-            clearFiltersBtn.addEventListener('click', () => {
-                filterCategoryEl.value = 'Todos';
-                filterMonthEl.value = 'Todos';
-                filterYearEl.value = 'Todos';
-                applyFilters();
-            });
-        };
-
-        // --- Gerenciamento de Autenticação ---
-        loginForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const email = loginForm.email.value;
-            const password = loginForm.password.value;
-            try {
-                await signInWithEmailAndPassword(auth, email, password);
-                loginForm.reset();
-                showModal('Login realizado com sucesso!');
-            } catch (error) {
-                console.error("Erro de login:", error);
-                showModal('Falha no login. Verifique seu e-mail e senha.');
-            }
-        });
-
-        registerForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const email = registerForm.email.value;
-            const password = registerForm.password.value;
-            try {
-                await createUserWithEmailAndPassword(auth, email, password);
-                registerForm.reset();
-                showModal('Registro realizado com sucesso! Você já está logado.');
-            } catch (error) {
-                console.error("Erro de registro:", error);
-                let message = 'Erro ao registrar. Tente novamente.';
-                if (error.code === 'auth/email-already-in-use') {
-                    message = 'E-mail já em uso. Tente outro ou faça login.';
-                } else if (error.code === 'auth/weak-password') {
-                    message = 'A senha é muito fraca. Digite pelo menos 6 caracteres.';
-                }
-                showModal(message);
-            }
-        });
-
-        logoutBtn.addEventListener('click', async () => {
-            try {
-                await signOut(auth);
-                showModal('Você foi desconectado(a).');
-            } catch (error) {
-                console.error("Erro ao sair:", error);
-                showModal('Erro ao sair. Tente novamente.');
-            }
-        });
-        
-        // --- Gerenciador de envio de formulário de despesas ---
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const expenseName = document.getElementById('expense-name').value.trim();
-            const expenseValue = document.getElementById('expense-value').value;
-            const expenseCategory = document.getElementById('expense-category').value;
-            
-            if (!expenseName || !expenseValue || !expenseCategory) {
-                showModal('Por favor, preencha todos os campos.');
-                return;
-            }
-
-            if (isNaN(parseFloat(expenseValue)) || parseFloat(expenseValue) <= 0) {
-                showModal('O valor deve ser um número positivo.');
-                return;
-            }
-
-            const now = new Date();
-            const newExpense = {
-                name: expenseName,
-                value: parseFloat(expenseValue),
-                category: expenseCategory,
-                createdAt: now,
-                month: now.getMonth() + 1, // Mês é indexado em 0
-                year: now.getFullYear()
+            // Função para exibir o modal personalizado
+            const showModal = (message) => {
+                modalMessage.textContent = message;
+                modal.classList.remove('hidden');
             };
 
-            try {
-                if (auth.currentUser) {
-                    await addDoc(expensesCollectionRef, newExpense);
-                    form.reset();
-                    showModal('Gasto adicionado com sucesso!');
-                } else {
-                    showModal('Por favor, faça login para adicionar gastos.');
+            // Função para ocultar o modal personalizado
+            const hideModal = () => {
+                modal.classList.add('hidden');
+            };
+
+            // Listener para o botão de fechar do modal
+            modalCloseBtn.addEventListener('click', hideModal);
+
+            // Renderiza as despesas na interface
+            const renderExpenses = (expenses) => {
+                expenseList.innerHTML = '';
+                let total = 0;
+                if (expenses.length === 0) {
+                    expenseList.innerHTML = '<p class="text-center text-gray-500 italic">Nenhum gasto registrado ainda.</p>';
                 }
-            } catch (e) {
-                showModal('Erro ao adicionar o gasto.');
-                console.error("Erro ao adicionar documento: ", e);
-            }
+                expenses.forEach(expense => {
+                    const li = document.createElement('li');
+                    li.className = 'flex justify-between items-center bg-white p-4 rounded-xl shadow-sm hover:shadow-md transition-shadow';
+                    li.innerHTML = `
+                        <div>
+                            <p class="font-semibold text-gray-800">${expense.name}</p>
+                            <p class="text-sm text-gray-500">Valor: R$ ${parseFloat(expense.value).toFixed(2).replace('.', ',')}</p>
+                            <span class="text-xs text-indigo-500 font-medium bg-indigo-100 px-2 py-1 rounded-full mt-1 inline-block">${expense.category}</span>
+                        </div>
+                        <button data-id="${expense.id}" class="delete-btn text-red-500 hover:text-red-700 transition-colors">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm6 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clip-rule="evenodd" />
+                            </svg>
+                        </button>
+                    `;
+                    expenseList.appendChild(li);
+                    total += parseFloat(expense.value);
+                });
+                totalAmountEl.textContent = `Total: R$ ${total.toFixed(2).replace('.', ',')}`;
+
+                // Adiciona listeners para os botões de exclusão
+                document.querySelectorAll('.delete-btn').forEach(button => {
+                    button.addEventListener('click', async (e) => {
+                        const id = e.currentTarget.dataset.id;
+                        if (id && auth.currentUser) {
+                            try {
+                                const expenseDocRef = doc(db, `artifacts/${appId}/users/${userId}/expenses`, id);
+                                await deleteDoc(expenseDocRef);
+                                showModal('Gasto excluído com sucesso!');
+                            } catch (e) {
+                                showModal('Erro ao excluir o gasto.');
+                                console.error("Erro ao remover documento: ", e);
+                            }
+                        }
+                    });
+                });
+
+                renderCharts(expenses);
+            };
+
+            // Renderiza o gráfico por categoria
+            const renderCharts = (expenses) => {
+                const totalsByCategory = {};
+                let grandTotal = 0;
+                
+                expenses.forEach(expense => {
+                    const category = expense.category;
+                    const value = parseFloat(expense.value);
+                    totalsByCategory[category] = (totalsByCategory[category] || 0) + value;
+                    grandTotal += value;
+                });
+
+                chartContainer.innerHTML = '';
+
+                if (Object.keys(totalsByCategory).length === 0) {
+                    chartContainer.innerHTML = '<p class="text-center text-gray-500 italic">Sem dados para o gráfico.</p>';
+                    return;
+                }
+                
+                const maxTotal = Math.max(...Object.values(totalsByCategory));
+
+                for (const category in totalsByCategory) {
+                    const total = totalsByCategory[category];
+                    const barHeight = (total / maxTotal) * 150;
+
+                    const categoryDiv = document.createElement('div');
+                    categoryDiv.className = 'flex flex-col items-center space-y-2';
+
+                    const barDiv = document.createElement('div');
+                    barDiv.className = 'w-10 bg-indigo-500 rounded-t-lg transition-all duration-300 ease-in-out hover:bg-indigo-600 relative';
+                    barDiv.style.height = `${barHeight}px`;
+
+                    const tooltipSpan = document.createElement('span');
+                    tooltipSpan.className = 'absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-800 text-white text-xs rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-300';
+                    tooltipSpan.textContent = `R$ ${total.toFixed(2).replace('.', ',')}`;
+                    
+                    const barContainer = document.createElement('div');
+                    barContainer.className = 'relative group';
+                    barContainer.appendChild(barDiv);
+                    barDiv.appendChild(tooltipSpan);
+
+                    const labelSpan = document.createElement('span');
+                    labelSpan.className = 'text-xs text-center text-gray-600 mt-2 truncate max-w-[80px]';
+                    labelSpan.textContent = category;
+
+                    categoryDiv.appendChild(barDiv);
+                    categoryDiv.appendChild(labelSpan);
+                    chartContainer.appendChild(categoryDiv);
+                }
+            };
+
+            // Aplica os filtros na query do Firestore
+            const applyFilters = () => {
+                if (!auth.currentUser) {
+                    return;
+                }
+
+                if (unsubscribe) {
+                    unsubscribe();
+                }
+
+                const category = filterCategoryEl.value;
+                const month = filterMonthEl.value;
+                const year = filterYearEl.value;
+                
+                let q = expensesCollectionRef;
+                const queryConstraints = [];
+                if (category !== 'Todos') {
+                    queryConstraints.push(where('category', '==', category));
+                }
+                if (month !== 'Todos') {
+                    queryConstraints.push(where('month', '==', parseInt(month)));
+                }
+                if (year !== 'Todos') {
+                    queryConstraints.push(where('year', '==', parseInt(year)));
+                }
+                q = query(q, ...queryConstraints);
+
+                unsubscribe = onSnapshot(q, (snapshot) => {
+                    const expenses = [];
+                    snapshot.forEach(doc => {
+                        expenses.push({ id: doc.id, ...doc.data() });
+                    });
+                    renderExpenses(expenses);
+                }, (error) => {
+                    console.error("Erro ao escutar mudanças:", error);
+                });
+            };
+
+            // Adiciona listeners para os filtros
+            const setupFilterListeners = () => {
+                filterCategoryEl.addEventListener('change', applyFilters);
+                filterMonthEl.addEventListener('change', applyFilters);
+                filterYearEl.addEventListener('change', applyFilters);
+                clearFiltersBtn.addEventListener('click', () => {
+                    filterCategoryEl.value = 'Todos';
+                    filterMonthEl.value = 'Todos';
+                    filterYearEl.value = 'Todos';
+                    applyFilters();
+                });
+            };
+
+            // --- Gerenciamento de Autenticação ---
+            loginForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const email = loginForm.email.value;
+                const password = loginForm.password.value;
+                try {
+                    await signInWithEmailAndPassword(auth, email, password);
+                    loginForm.reset();
+                    showModal('Login realizado com sucesso!');
+                } catch (error) {
+                    console.error("Erro de login:", error);
+                    showModal('Falha no login. Verifique seu e-mail e senha.');
+                }
+            });
+
+            registerForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const email = registerForm.email.value;
+                const password = registerForm.password.value;
+                try {
+                    await createUserWithEmailAndPassword(auth, email, password);
+                    registerForm.reset();
+                    showModal('Registro realizado com sucesso! Você já está logado.');
+                } catch (error) {
+                    console.error("Erro de registro:", error);
+                    let message = 'Erro ao registrar. Tente novamente.';
+                    if (error.code === 'auth/email-already-in-use') {
+                        message = 'E-mail já em uso. Tente outro ou faça login.';
+                    } else if (error.code === 'auth/weak-password') {
+                        message = 'A senha é muito fraca. Digite pelo menos 6 caracteres.';
+                    }
+                    showModal(message);
+                }
+            });
+
+            logoutBtn.addEventListener('click', async () => {
+                try {
+                    await signOut(auth);
+                    showModal('Você foi desconectado(a).');
+                } catch (error) {
+                    console.error("Erro ao sair:", error);
+                    showModal('Erro ao sair. Tente novamente.');
+                }
+            });
+            
+            // --- Gerenciador de envio de formulário de despesas ---
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const expenseName = document.getElementById('expense-name').value.trim();
+                const expenseValue = document.getElementById('expense-value').value;
+                const expenseCategory = document.getElementById('expense-category').value;
+                
+                if (!expenseName || !expenseValue || !expenseCategory) {
+                    showModal('Por favor, preencha todos os campos.');
+                    return;
+                }
+
+                if (isNaN(parseFloat(expenseValue)) || parseFloat(expenseValue) <= 0) {
+                    showModal('O valor deve ser um número positivo.');
+                    return;
+                }
+
+                const now = new Date();
+                const newExpense = {
+                    name: expenseName,
+                    value: parseFloat(expenseValue),
+                    category: expenseCategory,
+                    createdAt: now,
+                    month: now.getMonth() + 1, // Mês é indexado em 0
+                    year: now.getFullYear()
+                };
+
+                try {
+                    if (auth.currentUser) {
+                        await addDoc(expensesCollectionRef, newExpense);
+                        form.reset();
+                        showModal('Gasto adicionado com sucesso!');
+                    } else {
+                        showModal('Por favor, faça login para adicionar gastos.');
+                    }
+                } catch (e) {
+                    showModal('Erro ao adicionar o gasto.');
+                    console.error("Erro ao adicionar documento: ", e);
+                }
+            });
         });
     </script>
 </head>
